@@ -29,6 +29,24 @@
 pip install wecom-notifier
 ```
 
+### 维护者发布到 PyPI
+
+本项目通过 GitHub Actions 的 PyPI Trusted Publishing（短期 OIDC 身份）发布，不使用本机 `.pypirc`、长期 PyPI token 或其他静态密钥。必须由具备该项目 owner 权限的用户本人登录 PyPI，并自行完成平台要求的双重验证，在项目的 Publishing 设置中登记可信发布者。请由用户本人填写并核对以下字段，登记过程不要把值交给 AI：
+
+- PyPI 项目：`wecom-notifier`
+- Owner：`zlxlabs`
+- Repository：`wecom-notifier`
+- Workflow filename：`publish.yml`
+- GitHub environment：`pypi`
+
+发布工作流只允许手动触发，且实际上传 job 仅在 `main` 分支运行。代码版本、`pyproject.toml` 与模块版本必须一致；`version` 输入仅用于断言，不能覆盖源码版本。当前输入默认为 `0.3.2`。确认 PyPI 尚无该版本后，维护者可运行：
+
+```bash
+gh workflow run publish.yml --repo zlxlabs/wecom-notifier --ref main -f version=0.3.2
+```
+
+此命令会执行测试、构建并将该版本的 wheel 与 sdist 发布到 PyPI；工作流还会校验 PyPI 文件及 SHA256，并从 PyPI 隔离安装验证。该操作的公开副作用范围仅为 PyPI 发布；不会部署应用、升级下游、创建 GitHub Release 或 tag，也不会发送通知。重复版本、非主干、版本不匹配或任何发布前校验失败都会阻止上传。
+
 ### 从源码安装（当前）
 
 ```bash
