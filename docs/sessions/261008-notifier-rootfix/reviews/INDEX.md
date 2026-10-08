@@ -6,7 +6,7 @@
 
 - 当前：[B-closeout-verdict.md](B-closeout-verdict.md)。独立增量审与已安装包消费者复验无代码finding，原有限合同实测满足。全量150、目标32、H1反向7条目标断言红；源码外独立wheel、UTF-8/wire精确余量、结构、审核、页码、失败均有证据。
 - OCR：单独的前置扫描是`skipped`，不是`clean`；该状态不抹除已经完成的独立代码审查与运行时验证，也不等于正式CI/gate通过。
-- 交付：本地漏斗已完成，正式ready后的门禁与合并尚待执行；未发布或升级生产。
+- 交付：本地漏斗、正式ready门禁与PR #7合并已完成。producer run37758162809为SUCCESS，primary/quality/ledger/gate实际均成功；合并a97e29dc44c3f24324f1ff11c4227f52fc001b78文件树与已验收head96d0796相同。#2/#3已关闭；0.3.2包准备完成，未发布或升级生产。
 
 ## 历史记录，禁止当作当前代码状态
 
