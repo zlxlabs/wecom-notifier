@@ -207,6 +207,44 @@ def test_moderation_expansion_is_resegmented_before_http(monkeypatch, tmp_path):
     assert "[敏感词]" in "".join(texts)
 
 
+def test_moderation_block_still_fails_and_sends_the_existing_alert(monkeypatch, tmp_path):
+    prepared = _capture_prepared(monkeypatch)
+
+    class _Words:
+        text = "唯一禁词"
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: _Words())
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.manager.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.sender.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.core.rate_limiter.RateLimiter.acquire", lambda _limiter: None)
+    notifier = WeComNotifier(
+        max_retries=0,
+        enable_content_moderation=True,
+        moderation_config={
+            "sensitive_word_urls": ["https://words.invalid/block-list"],
+            "strategy": "block",
+            "cache_dir": str(tmp_path),
+            "log_sensitive_messages": False,
+        },
+    )
+    result = notifier.send_text(
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-block",
+        "唯一禁词",
+        async_send=False,
+    )
+    notifier.stop_all()
+
+    assert result.success is False
+    assert result.error == "Content blocked by moderator"
+    assert len(prepared) == 1
+    alert_content = _request_payload(prepared[0])["text"]["content"]
+    assert "敏感内容已拦截" in alert_content
+    assert "唯一禁词" not in alert_content
+
+
 def test_feishu_oversize_title_fails_before_first_post(monkeypatch):
     prepared = _capture_prepared(monkeypatch)
     monkeypatch.setattr("wecom_notifier.platforms.feishu.notifier.DualRateLimiter.acquire", lambda _limiter: None)
