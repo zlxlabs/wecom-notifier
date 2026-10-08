@@ -77,13 +77,14 @@ jobs:
 
           output = Path(sys.argv[1])
           version = sys.argv[2]
-          actual = sorted(path.name for path in output.iterdir() if path.is_file())
+          entries = list(output.iterdir())
+          actual = sorted(path.name for path in entries)
           expected = sorted([
               f"wecom_notifier-{version}-py3-none-any.whl",
               f"wecom_notifier-{version}.tar.gz",
           ])
-          if actual != expected:
-              raise SystemExit(f"expected exactly {expected}, got {actual}")
+          if actual != expected or any(not path.is_file() or path.is_symlink() for path in entries):
+              raise SystemExit(f"expected exactly two regular files {expected}, got {actual}")
           print("Built exactly: " + ", ".join(actual))
           PY
           python -m twine check --strict \
@@ -94,7 +95,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wecom-notifier-${{ inputs.version }}
-          path: ${{ runner.temp }}/wecom-notifier-dist/
+          path: |
+            ${{ runner.temp }}/wecom-notifier-dist/wecom_notifier-${{ inputs.version }}-py3-none-any.whl
+            ${{ runner.temp }}/wecom-notifier-dist/wecom_notifier-${{ inputs.version }}.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -132,13 +135,14 @@ jobs:
 
           output = Path(sys.argv[1])
           version = sys.argv[2]
-          actual = sorted(path.name for path in output.iterdir() if path.is_file())
+          entries = list(output.iterdir())
+          actual = sorted(path.name for path in entries)
           expected = sorted([
               f"wecom_notifier-{version}-py3-none-any.whl",
               f"wecom_notifier-{version}.tar.gz",
           ])
-          if actual != expected:
-              raise SystemExit(f"expected exactly {expected}, got {actual}")
+          if actual != expected or any(not path.is_file() or path.is_symlink() for path in entries):
+              raise SystemExit(f"expected exactly two regular files {expected}, got {actual}")
           print("Downloaded same-run artifact contains exactly the expected wheel and sdist")
           PY
 
@@ -181,9 +185,13 @@ jobs:
 
           version = os.environ["RELEASE_VERSION"]
           directory = Path(os.environ["RUNNER_TEMP"]) / "wecom-notifier-dist"
+          filenames = [
+              f"wecom_notifier-{version}-py3-none-any.whl",
+              f"wecom_notifier-{version}.tar.gz",
+          ]
           expected = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in directory.iterdir() if path.is_file()
+              filename: hashlib.sha256((directory / filename).read_bytes()).hexdigest()
+              for filename in filenames
           }
           url = f"https://pypi.org/pypi/wecom-notifier/{version}/json"
           request = Request(url, headers={"Accept": "application/json", "User-Agent": "wecom-notifier-release-check"})
