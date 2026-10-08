@@ -157,6 +157,11 @@ class MessageSegmenter:
                     emitted.append(current)
                     current = ""
                     continue
+                if self._size(fragment[0], measure) > capacity:
+                    if current:
+                        emitted.append(current)
+                        current = ""
+                        continue
                 part = self._split_unicode(fragment, capacity, measure)[0]
                 current += part
                 fragment = fragment[len(part):]
@@ -212,7 +217,9 @@ class MessageSegmenter:
                     body = "".join(lines[i + 1:close_index])
                     whole = opening + body + closing
                     if self._size(whole, measure) <= limit:
-                        append_plain(whole)
+                        if current and self._size(current + whole, measure) > limit:
+                            flush()
+                        current += whole
                     else:
                         boundary_newline = "\n"
                         overhead = self._size(opening + boundary_newline + closing, measure)
@@ -224,7 +231,9 @@ class MessageSegmenter:
                             first_limit = limit - self._size(
                                 current + opening + boundary_newline + closing, measure
                             )
-                            if first_limit <= 0:
+                            if first_limit <= 0 or (
+                                body and self._size(body[0], measure) > first_limit
+                            ):
                                 flush()
                                 first_limit = inner_limit
                         first_parts = self._split_unicode(body, first_limit, measure)
