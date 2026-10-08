@@ -15,9 +15,10 @@
 ## 单次触发与权威回读
 - 在主仓 main checkout 的 merge lease 内，仅执行一次：`gh workflow run publish.yml --repo zlxlabs/wecom-notifier --ref main -f version=0.3.2`；命令退出码 0。
 - GitHub Actions run ID：`37776634042`；URL：<https://github.com/zlxlabs/wecom-notifier/actions/runs/37776634042>。
-- 权威 run API 回读：`event=workflow_dispatch`，`path=.github/workflows/publish.yml`，`head_branch=main`，`head_sha=5b4e5f5d802a308391118d48ec30f406287ef349`，`created_at=2026-10-08T12:24:30Z`，`run_started_at=2026-10-08T12:24:30Z`，`status=in_progress`，`conclusion=null`，`run_attempt=1`。
+- 首次权威 run API 回读：`event=workflow_dispatch`，`path=.github/workflows/publish.yml`，`head_branch=main`，`head_sha=5b4e5f5d802a308391118d48ec30f406287ef349`，`created_at=2026-10-08T12:24:30Z`，`run_started_at=2026-10-08T12:24:30Z`，初始 `status=in_progress`、`conclusion=null`，`run_attempt=1`。
+- 收尾时 run API 已变为 `status=completed`、`conclusion=failure`（`updated_at=2026-10-08T12:26:15Z`）。只读结构化 job/step 状态：`Test and build distributions` 成功；`Publish verified distributions to PyPI` 失败，其中 `Publish with PyPI Trusted Publishing` 步骤成功、`Verify published PyPI files and hashes` 步骤失败，之后消费者安装/导入步骤跳过。未读取任何日志。
 - Run API 的 `inputs` 字段返回 `null`；版本输入依据为上述唯一一次实际 CLI 参数 `-f version=0.3.2`，并以零 run 基线后立即出现的唯一新 run 与时间线关联。未读取日志。
 
 ## 当前状态
-- 启动已核实；工作流仍在运行。最终构建、发布与公开 PyPI 包内容尚未验证，交由 Pi 主脑通过 managedCI 接收并另验。
-- 未重发 dispatch，未启动 CI watcher，也未执行发布终态判定。
+- 安全启动已核实；工作流最终以失败结束，但 Trusted Publishing 步骤报告成功、其后的发布文件/哈希核验步骤失败。公开 PyPI 包是否存在、文件与哈希是否正确均未由本执行器确认；请 Pi 主脑通过 managedCI 接收并立即另验公开包状态。不得据此重发 dispatch。
+- 未重发 dispatch，未启动 CI watcher，未读取日志，也未冒充发行领域终态判定。
