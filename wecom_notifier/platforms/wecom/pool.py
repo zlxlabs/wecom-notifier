@@ -8,7 +8,10 @@ from typing import List, Optional, Set, Tuple, Any, TYPE_CHECKING
 from wecom_notifier.core.pool_base import WebhookPoolBase
 from wecom_notifier.core.segmenter import MessageSegmenter
 from wecom_notifier.core.models import SegmentInfo
-from wecom_notifier.platforms.wecom.constants import MSG_TYPE_TEXT, MSG_TYPE_MARKDOWN_V2, MSG_TYPE_IMAGE
+from wecom_notifier.platforms.wecom.constants import (
+    MSG_TYPE_TEXT, MSG_TYPE_MARKDOWN_V2, MSG_TYPE_IMAGE,
+    _MAX_BYTES_PER_TEXT, MAX_BYTES_PER_MESSAGE,
+)
 from wecom_notifier.platforms.wecom.adapter import WeComSenderAdapter, WeComMessageConverter
 from wecom_notifier.platforms.wecom.models import Message
 from wecom_notifier.core.webhook_identity import webhook_identity
@@ -67,6 +70,9 @@ class WeComWebhookPool(WebhookPoolBase):
         企微的图片消息不需要分段。
         """
         return msg_type == MSG_TYPE_IMAGE
+
+    def _segment_budget(self, msg_type: str) -> int:
+        return _MAX_BYTES_PER_TEXT if msg_type == MSG_TYPE_TEXT else MAX_BYTES_PER_MESSAGE
 
     def should_skip_moderation(self, msg_type: str) -> bool:
         """

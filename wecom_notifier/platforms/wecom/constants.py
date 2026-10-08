@@ -34,8 +34,9 @@ from wecom_notifier.core.constants import (
 MSG_TYPE_MARKDOWN_V2 = "markdown_v2"  # 企微特有
 MSG_TYPE_IMAGE = "image"
 
-# 分段设置（企微特定）
-MAX_BYTES_PER_MESSAGE = 3800  # 每条消息最大字节数（留安全余量，实际限制4096）
+# 分段预算（平台限制出处记录于 docs/sessions/261008-notifier-rootfix/platform-limits.md）
+_MAX_BYTES_PER_TEXT = 2048  # 官方 text.content 上限
+MAX_BYTES_PER_MESSAGE = 3800  # markdown_v2.content 缓冲预算（官方上限 4096）
 
 # 服务端频控重试设置
 RATE_LIMIT_MAX_RETRIES = 5  # 服务端频控最大重试次数

@@ -15,7 +15,7 @@ from typing import Optional, List, Union, Dict, Any
 
 from wecom_notifier.core.logger import get_logger
 from wecom_notifier.core.models import SendResult
-from wecom_notifier.core.segmenter import MessageSegmenter
+from wecom_notifier.core.segmenter import MessageSegmenter, MessageSegmentOversizeError
 from wecom_notifier.core.webhook_identity import webhook_identity
 
 from .sender import FeishuSender, FeishuRetryConfig
@@ -24,6 +24,7 @@ from .constants import (
     MSG_TYPE_TEXT,
     MSG_TYPE_INTERACTIVE,
     MAX_BYTES_PER_MESSAGE,
+    _MAX_REQUEST_BODY_BYTES,
     DEFAULT_CARD_TEMPLATE,
 )
 
@@ -308,16 +309,20 @@ class _FeishuWebhookManager:
         if message.msg_type == MSG_TYPE_TEXT:
             content = self._add_mentions(content, message)
 
-        # 分段（卡片消息也可能需要分段）
-        segments = self.segmenter.segment(content, message.msg_type)
-        total_segments = len(segments)
+        # 分段、分页标题与请求体统一预检，任一不可行计划均在首个 POST 前失败。
+        try:
+            plans = self._plan_segments(message, content)
+        except MessageSegmentOversizeError as error:
+            result.mark_failed(str(error))
+            return
+        total_segments = len(plans)
 
         self.logger.debug(
             f"Feishu message {message.id} split into {total_segments} segments"
         )
 
         # 发送每个分段
-        for i, segment in enumerate(segments):
+        for i, (segment, page_title) in enumerate(plans):
             # 频率控制
             self.rate_limiter.acquire()
 
@@ -331,7 +336,7 @@ class _FeishuWebhookManager:
                 success, error = self.sender.send_card(
                     self.webhook_url,
                     segment.content,
-                    title=message.title,
+                    title=page_title,
                     template=message.template
                 )
 
@@ -358,6 +363,57 @@ class _FeishuWebhookManager:
         self.logger.info(
             f"Feishu message {message.id} sent successfully ({total_segments} segments)"
         )
+
+    def _plan_segments(self, message: FeishuMessage, content: str):
+        if message.msg_type == MSG_TYPE_TEXT:
+            base_size = self.sender._text_body_size(self.webhook_url, "")
+            budget = _MAX_REQUEST_BODY_BYTES - base_size
+            if budget <= 0:
+                raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: Feishu request envelope exceeds budget")
+            segments = self.segmenter._segment_bounded(
+                content,
+                MSG_TYPE_TEXT,
+                budget,
+                measure=self.sender._content_wire_size,
+            )
+            plans = [(segment, None) for segment in segments]
+            if any(self.sender._text_body_size(self.webhook_url, segment.content) > _MAX_REQUEST_BODY_BYTES
+                   for segment, _ in plans):
+                raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: Feishu text request exceeds budget")
+            return plans
+
+        page_guess = 1
+        while True:
+            titles = [
+                message.title if page_guess == 1 else f"{message.title} ({page}/{page_guess})"
+                for page in range(1, page_guess + 1)
+            ]
+            base_size = max(
+                self.sender._card_body_size(self.webhook_url, "", title, message.template)
+                for title in titles
+            )
+            budget = _MAX_REQUEST_BODY_BYTES - base_size
+            if budget <= 0:
+                raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: Feishu card header exceeds request budget")
+            segments = self.segmenter._segment_bounded(
+                content,
+                "interactive",
+                budget,
+                measure=self.sender._content_wire_size,
+            )
+            total = len(segments)
+            if total != page_guess:
+                page_guess = total
+                continue
+            plans = []
+            for page, segment in enumerate(segments, start=1):
+                title = message.title if total == 1 else f"{message.title} ({page}/{total})"
+                if self.sender._card_body_size(
+                    self.webhook_url, segment.content, title, message.template
+                ) > _MAX_REQUEST_BODY_BYTES:
+                    raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: Feishu card request exceeds budget")
+                plans.append((segment, title))
+            return plans
 
     def _add_mentions(self, content: str, message: FeishuMessage) -> str:
         """添加 @ 标签"""
