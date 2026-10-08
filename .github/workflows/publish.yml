@@ -1,0 +1,249 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Expected source version to publish (does not change project files)
+        required: true
+        default: "0.3.2"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wecom-notifier-pypi-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify requested version matches project metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+              raise SystemExit("version must be a three-part numeric release")
+          project_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          module = ast.parse(Path("wecom_notifier/__init__.py").read_text())
+          declared = [
+              ast.literal_eval(node.value)
+              for node in module.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+          ]
+          if len(declared) != 1 or version != project_version or version != declared[0]:
+              raise SystemExit("input version must match pyproject.toml and wecom_notifier.__version__")
+          print(f"Version contract verified: {version}")
+          PY
+
+      - name: Run project test suite
+        run: make test
+
+      - name: Install packaging tools
+        run: python -m pip install --disable-pip-version-check build twine
+
+      - name: Build and validate exactly one wheel and sdist
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/wecom-notifier-dist"
+          rm -rf "$output"
+          mkdir -p "$output"
+          python -m build --outdir "$output"
+          python - "$output" "$RELEASE_VERSION" <<'PY'
+          import sys
+          from pathlib import Path
+
+          output = Path(sys.argv[1])
+          version = sys.argv[2]
+          actual = sorted(path.name for path in output.iterdir() if path.is_file())
+          expected = sorted([
+              f"wecom_notifier-{version}-py3-none-any.whl",
+              f"wecom_notifier-{version}.tar.gz",
+          ])
+          if actual != expected:
+              raise SystemExit(f"expected exactly {expected}, got {actual}")
+          print("Built exactly: " + ", ".join(actual))
+          PY
+          python -m twine check --strict \
+            "$output/wecom_notifier-${RELEASE_VERSION}-py3-none-any.whl" \
+            "$output/wecom_notifier-${RELEASE_VERSION}.tar.gz"
+
+      - name: Upload the verified distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wecom-notifier-${{ inputs.version }}
+          path: ${{ runner.temp }}/wecom-notifier-dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish verified distributions to PyPI
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/wecom-notifier/
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Download distributions from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wecom-notifier-${{ inputs.version }}
+          path: ${{ runner.temp }}/wecom-notifier-dist
+          run-id: ${{ github.run_id }}
+
+      - name: Verify downloaded artifact contents
+        run: |
+          python - "$RUNNER_TEMP/wecom-notifier-dist" "$RELEASE_VERSION" <<'PY'
+          import sys
+          from pathlib import Path
+
+          output = Path(sys.argv[1])
+          version = sys.argv[2]
+          actual = sorted(path.name for path in output.iterdir() if path.is_file())
+          expected = sorted([
+              f"wecom_notifier-{version}-py3-none-any.whl",
+              f"wecom_notifier-{version}.tar.gz",
+          ])
+          if actual != expected:
+              raise SystemExit(f"expected exactly {expected}, got {actual}")
+          print("Downloaded same-run artifact contains exactly the expected wheel and sdist")
+          PY
+
+      - name: Fail if this PyPI version already exists
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          version = os.environ["RELEASE_VERSION"]
+          url = f"https://pypi.org/pypi/wecom-notifier/{version}/json"
+          request = Request(url, headers={"Accept": "application/json", "User-Agent": "wecom-notifier-release-check"})
+          try:
+              with urlopen(request, timeout=20) as response:
+                  status = response.status
+          except HTTPError as error:
+              status = error.code
+          if status == 404:
+              print(f"PyPI confirms wecom-notifier {version} does not exist")
+          elif status == 200:
+              raise SystemExit(f"PyPI version {version} already exists; refusing duplicate upload")
+          else:
+              raise SystemExit(f"PyPI version preflight returned HTTP {status}; existence is unknown")
+          PY
+
+      - name: Publish with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: ${{ runner.temp }}/wecom-notifier-dist
+
+      - name: Verify published PyPI files and hashes
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          version = os.environ["RELEASE_VERSION"]
+          directory = Path(os.environ["RUNNER_TEMP"]) / "wecom-notifier-dist"
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in directory.iterdir() if path.is_file()
+          }
+          url = f"https://pypi.org/pypi/wecom-notifier/{version}/json"
+          request = Request(url, headers={"Accept": "application/json", "User-Agent": "wecom-notifier-release-check"})
+          with urlopen(request, timeout=20) as response:
+              if response.status != 200:
+                  raise SystemExit(f"PyPI verification returned HTTP {response.status}")
+              payload = response.read(2_000_001)
+          if len(payload) > 2_000_000:
+              raise SystemExit("PyPI release metadata exceeded the 2 MB verification limit")
+          release = json.loads(payload)
+          info = release.get("info", {})
+          if info.get("name", "").lower().replace("_", "-") != "wecom-notifier" or info.get("version") != version:
+              raise SystemExit("PyPI returned unexpected project or version metadata")
+          files = {
+              item["filename"]: item.get("digests", {}).get("sha256")
+              for item in release.get("urls", [])
+          }
+          if set(files) != set(expected) or files != expected:
+              raise SystemExit("PyPI file list or SHA256 values differ from the built artifact")
+          for filename in sorted(expected):
+              print(f"PyPI verified {filename} sha256={expected[filename]}")
+          PY
+
+      - name: Install exact version from the public PyPI index
+        run: |
+          python -m venv "$RUNNER_TEMP/wecom-notifier-consumer"
+          "$RUNNER_TEMP/wecom-notifier-consumer/bin/python" -m pip install \
+            --disable-pip-version-check --no-cache-dir --index-url https://pypi.org/simple \
+            --only-binary=:all: "wecom-notifier==$RELEASE_VERSION"
+
+      - name: Verify installed consumer import and mocked notification
+        run: |
+          cd "$RUNNER_TEMP"
+          env -u PYTHONPATH "$RUNNER_TEMP/wecom-notifier-consumer/bin/python" - <<'PY'
+          import importlib.metadata
+          import sysconfig
+          from pathlib import Path
+          from unittest.mock import Mock, patch
+
+          import wecom_notifier
+          from wecom_notifier import WeComNotifier
+
+          version = __import__("os").environ["RELEASE_VERSION"]
+          installed = Path(wecom_notifier.__file__).resolve()
+          site_packages = Path(sysconfig.get_paths()["purelib"]).resolve()
+          if importlib.metadata.version("wecom-notifier") != version or wecom_notifier.__version__ != version:
+              raise SystemExit("installed distribution or module version does not match the requested release")
+          try:
+              installed.relative_to(site_packages)
+          except ValueError:
+              raise SystemExit("imported module is not from the isolated environment site-packages")
+
+          response = Mock()
+          response.json.return_value = {"errcode": 0, "errmsg": "ok"}
+          notifier = WeComNotifier(max_retries=0, retry_delay=0)
+          with patch("wecom_notifier.platforms.wecom.sender.requests.post", return_value=response) as post:
+              result = notifier.send_text("https://example.invalid/mock", "PyPI consumer check", async_send=False)
+          if result.success is not True or post.call_count != 1:
+              raise SystemExit("mocked public consumer call failed")
+          if post.call_args.kwargs["json"] != {"msgtype": "text", "text": {"content": "PyPI consumer check"}}:
+              raise SystemExit("consumer request payload differs from the expected public API")
+          print(f"Installed {version} from {installed.parent}; mocked consumer succeeded")
+          PY
