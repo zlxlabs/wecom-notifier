@@ -3,6 +3,7 @@
 """
 import time
 from wecom_notifier.core.rate_limiter import RateLimiter
+from wecom_notifier.core.webhook_identity import webhook_identity
 
 
 class WebhookResource:
@@ -125,9 +126,15 @@ class WebhookResource:
         quota = self.rate_limiter.get_available_count()
 
         if cooldown > 0:
-            return f"<WebhookResource url={self.url[:30]}... status={available} cooldown={cooldown:.1f}s>"
+            return (
+                f"<WebhookResource webhook_id={webhook_identity(self.url)} "
+                f"status={available} cooldown={cooldown:.1f}s>"
+            )
         else:
-            return f"<WebhookResource url={self.url[:30]}... status={available} quota={quota}>"
+            return (
+                f"<WebhookResource webhook_id={webhook_identity(self.url)} "
+                f"status={available} quota={quota}>"
+            )
 
 
 __all__ = ["WebhookResource"]

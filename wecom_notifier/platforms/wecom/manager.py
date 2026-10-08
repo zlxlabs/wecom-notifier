@@ -7,6 +7,7 @@ import time
 from typing import Optional, TYPE_CHECKING
 
 from wecom_notifier.core.logger import get_logger
+from wecom_notifier.core.webhook_identity import webhook_identity
 from wecom_notifier.core.models import SendResult, SegmentInfo
 from wecom_notifier.core.rate_limiter import RateLimiter
 from wecom_notifier.core.segmenter import MessageSegmenter
@@ -64,7 +65,9 @@ class WebhookManager:
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.worker_thread.start()
 
-        self.logger.info(f"WebhookManager initialized for {webhook_url}")
+        self.logger.info(
+            f"WebhookManager initialized (webhook_id={webhook_identity(webhook_url)})"
+        )
 
     def enqueue(self, message: Message) -> SendResult:
         """
@@ -85,7 +88,9 @@ class WebhookManager:
 
     def _process_queue(self):
         """处理消息队列的工作线程"""
-        self.logger.info(f"Worker thread started for {self.webhook_url}")
+        self.logger.info(
+            f"Worker thread started (webhook_id={webhook_identity(self.webhook_url)})"
+        )
 
         while not self._stop_flag.is_set():
             try:
@@ -98,11 +103,12 @@ class WebhookManager:
                 # 处理消息
                 self._process_message(message)
             except Exception as e:
-                self.logger.error(f"Error processing message {message.id}: {e}")
-                self.logger.exception(e)
+                self.logger.error(
+                    f"Error processing message {message.id} ({type(e).__name__})"
+                )
                 result = self.results.get(message.id)
                 if result:
-                    result.mark_failed(f"Internal error: {e}")
+                    result.mark_failed(f"Internal error ({type(e).__name__})")
             finally:
                 self.message_queue.task_done()
 
@@ -176,8 +182,14 @@ class WebhookManager:
 
             if not success:
                 # 发送失败，立即停止
-                self.logger.error(f"Segment {i + 1}/{total_segments} failed for message {message.id}: {error}")
-                result.mark_failed(f"Segment {i + 1}/{total_segments} failed: {error}")
+                safe_error = error or "send failed"
+                self.logger.error(
+                    f"Segment {i + 1}/{total_segments} failed for message "
+                    f"{message.id}: {safe_error}"
+                )
+                result.mark_failed(
+                    f"Segment {i + 1}/{total_segments} failed: {safe_error}"
+                )
                 return
 
             self.logger.debug(f"Segment {i + 1}/{total_segments} sent successfully for message {message.id}")
@@ -194,8 +206,11 @@ class WebhookManager:
             success, error = self.sender.send_mention_all(self.webhook_url)
 
             if not success:
-                self.logger.error(f"@all workaround failed for message {message.id}: {error}")
-                result.mark_failed(f"@all workaround failed: {error}")
+                safe_error = error or "send failed"
+                self.logger.error(
+                    f"@all workaround failed for message {message.id}: {safe_error}"
+                )
+                result.mark_failed(f"@all workaround failed: {safe_error}")
                 return
 
         # 所有分段发送成功
@@ -256,7 +271,9 @@ class WebhookManager:
 
     def stop(self):
         """停止管理器"""
-        self.logger.info(f"Stopping WebhookManager for {self.webhook_url}")
+        self.logger.info(
+            f"Stopping WebhookManager (webhook_id={webhook_identity(self.webhook_url)})"
+        )
         self._stop_flag.set()
         self.worker_thread.join(timeout=5)
 
