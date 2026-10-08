@@ -178,6 +178,7 @@ class WebhookPoolBase(ABC):
                 result.mark_failed("Content blocked by moderator")
                 return
             segments = moderated_result
+            total_segments = len(segments)
 
         # 记录使用的 webhooks
         used_webhooks: Set[str] = set()
@@ -287,8 +288,9 @@ class WebhookPoolBase(ABC):
         moderated_segments = []
 
         for segment in segments:
+            review_content = self.segmenter._review_content(segment)
             moderated_content = self.content_moderator.moderate(
-                content=segment.content,
+                content=review_content,
                 message_id=message.id,
                 msg_type=message.msg_type
             )
@@ -298,26 +300,26 @@ class WebhookPoolBase(ABC):
                 self.logger.warning(
                     f"Message {message.id} blocked by content moderator in pool"
                 )
-                self._send_block_alert(message, segment)
-                return None
-
-            bounded = self.segmenter._segment_bounded(
-                moderated_content,
-                message.msg_type,
-                self._segment_budget(message.msg_type),
-            )
-            if len(bounded) == 1 and bounded[0].content == moderated_content:
-                moderated_segments.append(SegmentInfo(
-                    moderated_content,
+                self._send_block_alert(message, SegmentInfo(
+                    review_content,
                     is_first=segment.is_first,
                     is_last=segment.is_last,
-                    page_number=segment.page_number,
-                    total_pages=segment.total_pages,
                 ))
-            else:
-                moderated_segments.extend(bounded)
+                return None
 
-        return moderated_segments
+            moderated_segments.append(SegmentInfo(
+                moderated_content,
+                is_first=segment.is_first,
+                is_last=segment.is_last,
+                page_number=None,
+                total_pages=None,
+            ))
+
+        return self.segmenter._segment_reviewed(
+            moderated_segments,
+            message.msg_type,
+            self._segment_budget(message.msg_type),
+        )
 
     def _send_block_alert(self, message: Message, segment: SegmentInfo):
         """发送审核拒绝提示"""

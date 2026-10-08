@@ -1,9 +1,9 @@
 """
 消息分段器。
 
-不变式：最终每段(含页码)按调用者计量方式不超预算，输入字符不丢、不拆 UTF-8 字符；
-分页数字增长重新计费；可容纳表格页重复表头，超长单元格按纯文本降级；
-长代码段补齐成对围栏并保留原缩进/换行。MESSAGE_SEGMENT_OVERSIZE 明确失败，
+不变式：最终每段(含页码和结构换行)按调用者计量方式不超预算，输入字符不丢、不拆 UTF-8 字符；
+分页数字增长重新计费；可容纳表格页重复表头、普通链接整体保留，超大结构按纯文本降级；
+长代码段补齐成对独立行围栏并保留原缩进/换行。MESSAGE_SEGMENT_OVERSIZE 明确失败，
 由 tests/test_bounded_delivery.py 的极小预算、结构和实际请求边界测试锁定。
 """
 import re
@@ -19,6 +19,7 @@ from .constants import (
 
 # 默认最大字节数（可被平台覆盖）
 DEFAULT_MAX_BYTES = 3800
+_INLINE_LINK_PATTERN = re.compile(r"!?\[[^\]]+\]\([^)]+\)")
 
 
 class MessageSegmentOversizeError(ValueError):
@@ -43,9 +44,33 @@ class MessageSegmenter:
 
     def _segment_bounded(self, content: str, msg_type: str, budget: int, measure=None) -> List[SegmentInfo]:
         """最终预算计量入口；页码、表头、围栏都在 budget 内。"""
+        return self._segment_contents([content], msg_type, budget, measure)
+
+    def _review_content(self, segment: SegmentInfo) -> str:
+        """只剥除元数据确认且前缀逐字相符的本库分页标记。"""
+        content = segment.content
+        if segment.page_number is None or segment.total_pages is None:
+            return content
+        marker = PAGE_INDICATOR_FORMAT.format(
+            current=segment.page_number,
+            total=segment.total_pages,
+        )
+        return content[len(marker):] if content.startswith(marker) else content
+
+    def _segment_reviewed(
+        self, segments: List[SegmentInfo], msg_type: str, budget: int, measure=None
+    ) -> List[SegmentInfo]:
+        """去掉仅由页码元数据确认的本库前缀，再对审核结果统一分页。"""
+        contents = [self._review_content(segment) for segment in segments]
+        return self._segment_contents(["".join(contents)], msg_type, budget, measure)
+
+    def _segment_contents(self, contents: List[str], msg_type: str, budget: int, measure=None) -> List[SegmentInfo]:
+        """对多个已审核原分段共享一个最终页数；不改变审核边界或次数。"""
         measure = measure or (lambda value: len(value.encode("utf-8")))
         if budget <= 0:
             raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: budget must be positive")
+        if not contents:
+            return []
 
         page_guess = 1
         while True:
@@ -58,14 +83,16 @@ class MessageSegmenter:
             payload_budget = budget - prefix_budget
             if payload_budget <= 0:
                 raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: page indicator exceeds budget")
-            if msg_type in (MSG_TYPE_TEXT,):
-                chunks = self._bounded_text_chunks(content, payload_budget, measure)
-            elif msg_type in (MSG_TYPE_MARKDOWN, "markdown_v2", "interactive"):
-                chunks = self._bounded_markdown_chunks(content, payload_budget, measure)
-            else:
-                chunks = [content]
-                if measure(content) > payload_budget:
-                    raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: unsupported message type")
+            chunks = []
+            for content in contents:
+                if msg_type == MSG_TYPE_TEXT:
+                    chunks.extend(self._bounded_text_chunks(content, payload_budget, measure))
+                elif msg_type in (MSG_TYPE_MARKDOWN, "markdown_v2", "interactive"):
+                    chunks.extend(self._bounded_markdown_chunks(content, payload_budget, measure))
+                else:
+                    if measure(content) > payload_budget:
+                        raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: unsupported message type")
+                    chunks.append(content)
             if len(chunks) == page_guess:
                 return self._mark_segments(chunks, budget, measure)
             page_guess = len(chunks)
@@ -118,6 +145,40 @@ class MessageSegmenter:
             parts.append(current)
         return parts or [""]
 
+    def _append_markdown_text(self, text: str, current: str, limit: int, measure):
+        """普通 Markdown 行优先保持可容纳的行内链接为一个不可拆单位。"""
+        emitted = []
+
+        def append_fragment(fragment):
+            nonlocal current
+            while fragment:
+                capacity = limit - self._size(current, measure)
+                if capacity <= 0:
+                    emitted.append(current)
+                    current = ""
+                    continue
+                part = self._split_unicode(fragment, capacity, measure)[0]
+                current += part
+                fragment = fragment[len(part):]
+                if fragment:
+                    emitted.append(current)
+                    current = ""
+
+        position = 0
+        for match in _INLINE_LINK_PATTERN.finditer(text):
+            append_fragment(text[position:match.start()])
+            link = match.group(0)
+            if self._size(link, measure) <= limit:
+                if current and self._size(current + link, measure) > limit:
+                    emitted.append(current)
+                    current = ""
+                current += link
+            else:
+                append_fragment(link)
+            position = match.end()
+        append_fragment(text[position:])
+        return emitted, current
+
     def _bounded_markdown_chunks(self, text: str, limit: int, measure) -> List[str]:
         """保留普通行；表格超页重复表头；长代码块拆分后补齐代码围栏。"""
         lines = text.splitlines(keepends=True)
@@ -133,13 +194,8 @@ class MessageSegmenter:
 
         def append_plain(value: str):
             nonlocal current
-            if self._size(current + value, measure) <= limit:
-                current += value
-                return
-            flush()
-            parts = self._split_unicode(value, limit, measure)
-            chunks.extend(parts[:-1])
-            current = parts[-1]
+            emitted, current = self._append_markdown_text(value, current, limit, measure)
+            chunks.extend(emitted)
 
         i = 0
         while i < len(lines):
@@ -158,25 +214,28 @@ class MessageSegmenter:
                     if self._size(whole, measure) <= limit:
                         append_plain(whole)
                     else:
-                        overhead = self._size(opening + closing, measure)
+                        boundary_newline = "\n"
+                        overhead = self._size(opening + boundary_newline + closing, measure)
                         inner_limit = limit - overhead
                         if inner_limit <= 0:
                             raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: code fences exceed budget")
                         first_limit = inner_limit
                         if current:
-                            first_limit = limit - self._size(current + opening + closing, measure)
+                            first_limit = limit - self._size(
+                                current + opening + boundary_newline + closing, measure
+                            )
                             if first_limit <= 0:
                                 flush()
                                 first_limit = inner_limit
                         first_parts = self._split_unicode(body, first_limit, measure)
-                        first = current + opening + first_parts[0] + closing
+                        first = current + opening + first_parts[0] + boundary_newline + closing
                         if self._size(first, measure) > limit:
                             raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: code block cannot fit")
                         chunks.append(first)
                         current = ""
                         remaining = body[len(first_parts[0]):]
                         for part in self._split_unicode(remaining, inner_limit, measure):
-                            code_part = opening + part + closing
+                            code_part = opening + part + boundary_newline + closing
                             if self._size(code_part, measure) > limit:
                                 raise MessageSegmentOversizeError("MESSAGE_SEGMENT_OVERSIZE: code block cannot fit")
                             chunks.append(code_part)
@@ -204,7 +263,10 @@ class MessageSegmenter:
                                 table_parts.append(table_current)
                             elif not table_parts:
                                 table_parts.append(header)
-                            table_parts.extend(self._split_unicode(row, limit, measure))
+                            row_chunks, row_tail = self._append_markdown_text(row, "", limit, measure)
+                            table_parts.extend(row_chunks)
+                            if row_tail:
+                                table_parts.append(row_tail)
                             table_current = header if row_index < len(rows) - 1 else ""
                         elif self._size(table_current + row, measure) <= limit:
                             table_current += row

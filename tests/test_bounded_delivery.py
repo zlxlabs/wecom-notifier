@@ -294,7 +294,7 @@ def test_markdown_preserves_blank_lines_indentation_and_closes_each_code_page():
     assert len(code_segments) > 1
     assert all(segment.count("```") == 2 for segment in code_segments)
     assert "正文\n\n\n标题相邻\n```python\n    CODE-BEGIN\n" in code_segments[0]
-    assert "    CODE-END\n```" in code_segments[-1]
+    assert "    CODE-END\n\n```" in code_segments[-1]
 
 
 def test_small_table_rows_repeat_header_on_each_continuation_page():
@@ -331,3 +331,165 @@ def test_page_number_digit_growth_and_tiny_budget_are_bounded():
 def test_impossibly_small_segment_budget_fails_instead_of_looping():
     with pytest.raises(ValueError):
         MessageSegmenter(max_bytes=1).segment("🙂", "text")
+
+
+@pytest.mark.parametrize("platform", ["wecom", "feishu"])
+def test_ordinary_inline_link_stays_whole_when_a_long_markdown_line_splits(monkeypatch, platform):
+    prepared = _capture_prepared(monkeypatch)
+    link = "[useful](https://example.invalid/path)"
+    if platform == "wecom":
+        prefix = "x" * (3800 - len("(Page 1/2)\n".encode("utf-8")) - 1)
+        monkeypatch.setattr("wecom_notifier.platforms.wecom.manager.time.sleep", lambda _delay: None)
+        monkeypatch.setattr("wecom_notifier.platforms.wecom.sender.time.sleep", lambda _delay: None)
+        monkeypatch.setattr("wecom_notifier.core.rate_limiter.RateLimiter.acquire", lambda _limiter: None)
+        notifier = WeComNotifier(max_retries=0)
+        content = prefix + link + "z" * 300
+        result = notifier.send_markdown(
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-link",
+            content,
+            async_send=False,
+        )
+        texts = [_request_payload(request)["markdown_v2"]["content"] for request in prepared]
+    else:
+        prefix = "x" * 19750
+        monkeypatch.setattr("wecom_notifier.platforms.feishu.notifier.time.sleep", lambda _delay: None)
+        monkeypatch.setattr("wecom_notifier.platforms.feishu.notifier.DualRateLimiter.acquire", lambda _limiter: None)
+        notifier = FeishuNotifier(max_retries=0)
+        content = prefix + link + "z" * 300
+        result = notifier.send_card(
+            "https://open.feishu.cn/open-apis/bot/v2/hook/fake-link",
+            content,
+            async_send=False,
+        )
+        texts = [
+            _request_payload(request)["card"]["body"]["elements"][0]["content"]
+            for request in prepared
+        ]
+        budget = 20000
+    notifier.stop_all()
+
+    assert result.success is True
+    assert len(prepared) > 1
+    assert sum(link in text for text in texts) == 1
+    for index, text in enumerate(texts, start=1):
+        marker = f"(Page {index}/{len(texts)})\n"
+        assert text.startswith(marker)
+    assert "".join(text[len(f"(Page {index}/{len(texts)})\n"):]
+                   for index, text in enumerate(texts, start=1)) == content
+    if platform == "wecom":
+        assert all(len(text.encode("utf-8")) <= 3800 for text in texts)
+    else:
+        assert all(len(request.body) <= budget for request in prepared)
+
+
+@pytest.mark.parametrize("entry", ["single", "pool"])
+def test_reviewed_multipage_text_gets_one_global_pagination_and_count(monkeypatch, tmp_path, entry):
+    prepared = _capture_prepared(monkeypatch)
+
+    class _Words:
+        text = "扩张词"
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: _Words())
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.manager.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.sender.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.core.pool_base.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.core.rate_limiter.RateLimiter.acquire", lambda _limiter: None)
+    notifier = WeComNotifier(
+        max_retries=0,
+        enable_content_moderation=True,
+        moderation_config={
+            "sensitive_word_urls": ["https://words.invalid/multipage-list"],
+            "strategy": "replace",
+            "cache_dir": str(tmp_path / entry),
+            "log_sensitive_messages": False,
+        },
+    )
+    reviewed_inputs = []
+    reviewed_outputs = []
+    moderate = notifier.content_moderator.moderate
+    def record_review(**kwargs):
+        reviewed_inputs.append(kwargs["content"])
+        result = moderate(**kwargs)
+        reviewed_outputs.append(result)
+        return result
+    notifier.content_moderator.moderate = record_review
+
+    content = "用户页码：(Page 7/9)\n" + "扩张词" * 850 + "\n用户页码：(Page 2/3)\nUSER-BODY-END"
+    urls = (
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-multipage-single"
+        if entry == "single"
+        else [
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-multipage-pool-a",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-multipage-pool-b",
+        ]
+    )
+    result = notifier.send_text(urls, content, async_send=False)
+    notifier.stop_all()
+
+    assert result.success is True
+    assert len(reviewed_inputs) > 1
+    assert len(reviewed_inputs) == len(reviewed_outputs)
+    assert "".join(reviewed_inputs) == content
+    assert len(prepared) > len(reviewed_inputs)
+    texts = [_request_payload(request)["text"]["content"] for request in prepared]
+    assert all(len(text.encode("utf-8")) <= 2048 for text in texts)
+    recovered = []
+    for page, text in enumerate(texts, start=1):
+        system_marker = f"(Page {page}/{len(texts)})\n"
+        assert text.startswith(system_marker)
+        recovered.append(text[len(system_marker):])
+    reviewed_body = "".join(reviewed_outputs)
+    assert "".join(recovered) == reviewed_body
+    assert "用户页码：(Page 7/9)\n" in reviewed_body
+    assert "用户页码：(Page 2/3)\nUSER-BODY-END" in reviewed_body
+    if entry == "pool":
+        assert result.segment_count == len(texts)
+
+
+@pytest.mark.parametrize(
+    "code_body",
+    ["x" * 9000, "a\n" * 4500],
+    ids=["single-long-line", "many-short-lines"],
+)
+def test_split_code_fences_are_standalone_and_restore_only_boundary_newlines(
+    monkeypatch, code_body
+):
+    prepared = _capture_prepared(monkeypatch)
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.manager.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.platforms.wecom.sender.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("wecom_notifier.core.rate_limiter.RateLimiter.acquire", lambda _limiter: None)
+    notifier = WeComNotifier(max_retries=0)
+    source = "标题相邻\n```text\n" + code_body + "\n```\nAFTER-CODE\n普通段落\n"
+    result = notifier.send_markdown(
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fake-code-boundary",
+        source,
+        async_send=False,
+    )
+    notifier.stop_all()
+
+    assert result.success is True
+    assert len(prepared) > 1
+    texts = [_request_payload(request)["markdown_v2"]["content"] for request in prepared]
+    assert all(len(text.encode("utf-8")) <= 3800 for text in texts)
+    recovered_body = []
+    code_page_count = 0
+    after_code_pages = []
+    for page, text in enumerate(texts, start=1):
+        system_marker = f"(Page {page}/{len(texts)})\n"
+        assert text.startswith(system_marker)
+        text = text[len(system_marker):]
+        match = re.search(r"```text\n(.*?)\n```(?:\n|$)", text, re.DOTALL)
+        if match:
+            code_page_count += 1
+            recovered_body.append(match.group(1))
+            assert text.count("```") == 2
+        if "AFTER-CODE" in text:
+            assert "```" not in text
+            after_code_pages.append(text)
+    assert code_page_count > 1
+    assert "".join(recovered_body) == code_body + "\n"
+    assert after_code_pages
+    assert "普通段落\n" in "".join(after_code_pages)

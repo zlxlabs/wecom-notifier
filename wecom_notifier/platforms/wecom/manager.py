@@ -148,9 +148,10 @@ class WebhookManager:
                     moderated_segments.append(segment)
                     continue
 
-                # 审核文本内容（传入message_id和msg_type）
+                # 审核原有分段的用户正文；仅排除由分段元数据确认的系统页码。
+                review_content = self.segmenter._review_content(segment)
                 moderated_content = self.content_moderator.moderate(
-                    content=segment.content,
+                    content=review_content,
                     message_id=message.id,
                     msg_type=message.msg_type
                 )
@@ -158,7 +159,7 @@ class WebhookManager:
                 if moderated_content is None:
                     # 被拒绝，发送敏感词提示
                     self.logger.warning(f"Message {message.id} blocked by content moderator")
-                    alert_msg = self.content_moderator.create_block_alert(segment.content, message.id)
+                    alert_msg = self.content_moderator.create_block_alert(review_content, message.id)
 
                     # 发送提示消息
                     self.rate_limiter.acquire()
@@ -172,8 +173,8 @@ class WebhookManager:
                     content=moderated_content,
                     is_first=segment.is_first,
                     is_last=segment.is_last,
-                    page_number=segment.page_number,
-                    total_pages=segment.total_pages
+                    page_number=None,
+                    total_pages=None
                 )
                 moderated_segments.append(moderated_segment)
 
@@ -256,24 +257,11 @@ class WebhookManager:
     def _resegment_moderated(self, message: Message, segments):
         if message.msg_type == MSG_TYPE_IMAGE:
             return segments
-        bounded = []
-        for segment in segments:
-            reviewed = self.segmenter._segment_bounded(
-                segment.content,
-                message.msg_type,
-                self._segment_budget(message.msg_type),
-            )
-            if len(reviewed) == 1 and reviewed[0].content == segment.content:
-                bounded.append(SegmentInfo(
-                    segment.content,
-                    is_first=segment.is_first,
-                    is_last=segment.is_last,
-                    page_number=segment.page_number,
-                    total_pages=segment.total_pages,
-                ))
-            else:
-                bounded.extend(reviewed)
-        return bounded
+        return self.segmenter._segment_reviewed(
+            segments,
+            message.msg_type,
+            self._segment_budget(message.msg_type),
+        )
 
     def _send_segment(self, message: Message, content: str, segment_index: int) -> tuple:
         """
