@@ -23,6 +23,17 @@ failure-visibility: clean
 6. **上传后分发物和消费者验证**：`publish.yml:177-256` 从 PyPI JSON 的完整 `urls` 分发清单提取文件名与 SHA256，并与 build 目录中的 wheel/sdist 字节哈希逐项比较；不把 PEP 740 attestation 当成 distribution。随后从 `https://pypi.org/simple` 在 runner-temp 新 venv 安装精确版本，切到源码外 cwd、清除 `PYTHONPATH`，核验 metadata/module 版本及 site-packages 路径，再用 mock `requests.post` 断言实际请求 payload。通过代码检查与隔离 inline-script 探针；没有真实 PyPI 包可供安装验证。
 7. **README 行为与副作用**：`README.md:34-48` 对发布者登记字段和手动命令的描述与 workflow 一致；列出的 owner/repository/workflow/environment 没有被称为密码或机密。README 声明发布仅作用于 PyPI，workflow 未创建 tag/release、部署、下游升级或发送消息。通过。
 
+## 官方来源
+
+本轮按完整 SHA 读取以下 action 的官方 `action.yml`；runner 源码用来核实容器挂载与输入路径翻译。source URL、浏览输入和具体摘录缓存在 dispatch report artifacts 的 `official-source-evidence.json`。
+
+- checkout `3d3c42e5aac5ba805825da76410c181273ba90b1`：[官方 action.yml](https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml)
+- setup-python `5fda3b95a4ea91299a34e894583c3862153e4b97`：[官方 action.yml](https://github.com/actions/setup-python/blob/5fda3b95a4ea91299a34e894583c3862153e4b97/action.yml)
+- upload-artifact `cf430e030ddbb5b0abf93d22962f4752f3646cd9`：[官方 action.yml](https://github.com/actions/upload-artifact/blob/cf430e030ddbb5b0abf93d22962f4752f3646cd9/action.yml)
+- download-artifact `9000827ccba6bdab643e8b6fd33ac0654aef8333`：[官方 action.yml](https://raw.githubusercontent.com/actions/download-artifact/9000827ccba6bdab643e8b6fd33ac0654aef8333/action.yml)
+- PyPA publish `dc37677b2e1c63e2034f94d8a5b11f265b73ba33`：[官方 action.yml](https://github.com/pypa/gh-action-pypi-publish/blob/dc37677b2e1c63e2034f94d8a5b11f265b73ba33/action.yml)
+- Docker action runtime：[官方 ContainerActionHandler.cs](https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ContainerActionHandler.cs#L1075-L1183) 与 [ContainerInfo.cs](https://github.com/actions/runner/blob/main/src/Runner.Worker/Container/ContainerInfo.cs#L1227-L1282)。两页均为 runner `main`，不是本次未执行的 hosted runner 二进制版本。
+
 ## 审查 finding 与交付判断
 
 - P1：无。
