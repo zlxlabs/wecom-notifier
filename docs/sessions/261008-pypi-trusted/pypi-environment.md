@@ -6,8 +6,8 @@
 - 未改 workflow、README、应用、tests、其他 environment 或其他仓库。
 
 ## 修改前读取
-- 读取时间：2026-10-08T11:23:15Z。GitHub environments 列表 `total_count=0`；目标 GET `/repos/zlxlabs/wecom-notifier/environments/pypi` 返回权威 HTTP 404（GitHub 响应链接到官方 Get an environment 文档）。
-- 同一时点读取目标 deployment-branch-policies 列表，HTTP 404；环境不存在，故没有既有 branch policies 或保护规则可覆盖。
+- GitHub environments 列表读取时间：2026-10-08T11:23:15Z，`total_count=0`。另在任何写入前读取目标 GET `/repos/zlxlabs/wecom-notifier/environments/pypi`，返回权威 HTTP 404（GitHub 响应链接到官方 Get an environment 文档）。
+- 写入前读取目标 deployment-branch-policies 列表，HTTP 404；环境不存在，故没有既有 branch policies 或保护规则可覆盖。
 
 ## 创建及权威回读
 - 创建结果：新建 environment，非原有对象。PUT 创建于 `2026-10-08T11:24:51Z`；GitHub 返回 environment ID `23773364878`。
