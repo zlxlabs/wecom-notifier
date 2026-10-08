@@ -88,7 +88,7 @@ P2 finding 仅涉及意外 worker 异常：清除异常文本/堆栈后，manage
      'cp "$REVIEW_TREE"/tests/test_webhook_credentials.py tests/test_webhook_credentials.py && "$REVIEW_TREE"/.venv/bin/python -m pytest -q tests/test_webhook_credentials.py -k "public_success_logs_distinct_stable_identity_and_posts_original_urls or worker_exceptions_are_sanitized_for_single_feishu_and_wecom_pool"'
    ```
 
-   退出码 1；`2 failed, 5 deselected in 3.11s`，两条均因目标凭据/日志断言触发 `AssertionError`，不是新增模块 `ImportError`。全文件补充红验为 `7 failed in 8.21s`，同样是目标断言转红。
+   退出码 1；`2 failed, 5 deselected in 3.14s`，两条均因目标凭据/日志断言触发 `AssertionError`，不是新增模块 `ImportError`。全文件补充红验为 `7 failed in 8.21s`，同样是目标断言转红。
 4. 重试/URL mock 探针：WeCom 与 Feishu 各对原 URL 首次抛 `ConnectionError`、第二次返回成功；输出均为 `requests=2 url_preserved=True recovered=True key_in_logs=False`。没有真实网络访问。
 5. 基线 CI 作业在卡面记录为不可用；本轮未运行 CI/gate，也未读取或接管 PR 状态。
 
