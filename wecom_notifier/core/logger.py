@@ -99,6 +99,7 @@ def setup_logger(
             format=console_format,
             level=log_level.upper(),
             colorize=colorize,
+            diagnose=False,
             filter=lambda record: record["extra"].get("library") == "wecom_notifier"
         )
 
@@ -112,6 +113,7 @@ def setup_logger(
             rotation="10 MB",
             retention="7 days",
             compression="zip",
+            diagnose=False,
             filter=lambda record: record["extra"].get("library") == "wecom_notifier"
         )
 

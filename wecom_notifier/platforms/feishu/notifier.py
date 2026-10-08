@@ -16,6 +16,7 @@ from typing import Optional, List, Union, Dict, Any
 from wecom_notifier.core.logger import get_logger
 from wecom_notifier.core.models import SendResult
 from wecom_notifier.core.segmenter import MessageSegmenter
+from wecom_notifier.core.webhook_identity import webhook_identity
 
 from .sender import FeishuSender, FeishuRetryConfig
 from .rate_limiter import DualRateLimiter
@@ -249,7 +250,10 @@ class _FeishuWebhookManager:
         )
         self.worker_thread.start()
 
-        self.logger.info(f"FeishuWebhookManager initialized for {webhook_url[:50]}...")
+        self.logger.info(
+            f"FeishuWebhookManager initialized "
+            f"(webhook_id={webhook_identity(webhook_url)})"
+        )
 
     def enqueue(self, message: FeishuMessage) -> SendResult:
         """将消息加入队列"""
@@ -265,7 +269,8 @@ class _FeishuWebhookManager:
     def _process_queue(self):
         """处理消息队列"""
         self.logger.info(
-            f"Feishu worker thread started for {self.webhook_url[:50]}..."
+            f"Feishu worker thread started "
+            f"(webhook_id={webhook_identity(self.webhook_url)})"
         )
 
         while not self._stop_flag.is_set():
@@ -277,11 +282,13 @@ class _FeishuWebhookManager:
             try:
                 self._process_message(message)
             except Exception as e:
-                self.logger.error(f"Error processing Feishu message {message.id}: {e}")
-                self.logger.exception(e)
+                self.logger.error(
+                    f"Error processing Feishu message {message.id} "
+                    f"({type(e).__name__})"
+                )
                 result = self.results.get(message.id)
                 if result:
-                    result.mark_failed(f"Internal error: {e}")
+                    result.mark_failed(f"Internal error ({type(e).__name__})")
             finally:
                 self.message_queue.task_done()
 
@@ -333,10 +340,11 @@ class _FeishuWebhookManager:
                     f"Feishu segment {i + 1}/{total_segments} sent for message {message.id}"
                 )
             else:
+                safe_error = error or "send failed"
                 self.logger.error(
-                    f"Feishu segment {i + 1}/{total_segments} failed: {error}"
+                    f"Feishu segment {i + 1}/{total_segments} failed: {safe_error}"
                 )
-                result.mark_failed(error)
+                result.mark_failed(safe_error)
                 return
 
             # 分段间延迟
@@ -372,7 +380,10 @@ class _FeishuWebhookManager:
 
     def stop(self):
         """停止管理器"""
-        self.logger.info(f"Stopping FeishuWebhookManager for {self.webhook_url[:50]}...")
+        self.logger.info(
+            f"Stopping FeishuWebhookManager "
+            f"(webhook_id={webhook_identity(self.webhook_url)})"
+        )
         self._stop_flag.set()
         self.worker_thread.join(timeout=5)
 

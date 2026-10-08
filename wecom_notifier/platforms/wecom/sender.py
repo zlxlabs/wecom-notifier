@@ -8,6 +8,7 @@ from typing import Dict, Any, Tuple, Optional
 import requests
 
 from wecom_notifier.core.logger import get_logger
+from wecom_notifier.core.webhook_identity import webhook_identity
 from .exceptions import (
     NetworkError,
     WebhookInvalidError,
@@ -183,7 +184,10 @@ class Sender:
         while True:
             try:
                 attempt_desc = f"network_retry={network_retry_count}, rate_limit_retry={rate_limit_retry_count}"
-                self.logger.debug(f"Sending request to {webhook_url} ({attempt_desc})")
+                self.logger.debug(
+                    f"Sending request to webhook_id={webhook_identity(webhook_url)} "
+                    f"({attempt_desc})"
+                )
 
                 response = requests.post(
                     webhook_url,
@@ -196,7 +200,7 @@ class Sender:
                 result = response.json()
 
                 errcode = result.get('errcode')
-                errmsg = result.get('errmsg', 'Unknown error')
+                safe_errcode = errcode if type(errcode) is int else "unknown"
 
                 if errcode == ERRCODE_SUCCESS:
                     self.logger.info(f"Message sent successfully")
@@ -204,14 +208,24 @@ class Sender:
 
                 # 处理不同错误码
                 if errcode == ERRCODE_WEBHOOK_INVALID:
-                    error = WebhookInvalidError(f"Invalid webhook: {errmsg}")
-                    self.logger.error(f"Webhook invalid: {errmsg}")
+                    error = WebhookInvalidError(
+                        f"Invalid webhook (code {safe_errcode})"
+                    )
+                    self.logger.error(
+                        f"Webhook invalid (code {safe_errcode}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
                 elif errcode == ERRCODE_RATE_LIMIT:
                     # 服务端频控：可能是其他程序触发的，需要等待足够长的时间
-                    error = RateLimitError(f"Rate limit exceeded: {errmsg}")
-                    self.logger.warning(f"Server-side rate limit exceeded: {errmsg}")
+                    error = RateLimitError(
+                        f"Rate limit exceeded (code {safe_errcode})"
+                    )
+                    self.logger.warning(
+                        f"Server-side rate limit exceeded (code {safe_errcode}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
 
                     if rate_limit_retry_count < RATE_LIMIT_MAX_RETRIES:
                         rate_limit_retry_count += 1
@@ -232,22 +246,31 @@ class Sender:
                         return False, str(error)
 
                 else:
-                    error = WeComError(f"API error {errcode}: {errmsg}")
-                    self.logger.error(f"API error: {errcode} - {errmsg}")
+                    error = WeComError(f"API error {safe_errcode}")
+                    self.logger.error(
+                        f"API error {safe_errcode} for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
-            except requests.Timeout as e:
-                last_error = NetworkError(f"Request timeout: {e}")
-                self.logger.warning(f"Request timeout: {e}")
+            except requests.Timeout:
+                last_error = NetworkError("Request timeout")
+                self.logger.warning(
+                    f"Request timeout for webhook_id={webhook_identity(webhook_url)}"
+                )
 
-            except requests.ConnectionError as e:
-                last_error = NetworkError(f"Connection failed: {e}")
-                self.logger.warning(f"Connection failed: {e}")
+            except requests.ConnectionError:
+                last_error = NetworkError("Connection failed")
+                self.logger.warning(
+                    f"Connection failed for webhook_id={webhook_identity(webhook_url)}"
+                )
 
             except Exception as e:
-                last_error = WeComError(f"Unexpected error: {e}")
-                self.logger.error(f"Unexpected error: {e}")
-                self.logger.exception(e)
+                last_error = WeComError(f"Unexpected error ({type(e).__name__})")
+                self.logger.error(
+                    f"Unexpected error ({type(e).__name__}) for "
+                    f"webhook_id={webhook_identity(webhook_url)}"
+                )
                 return False, str(last_error)
 
             # 处理网络错误重试

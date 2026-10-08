@@ -20,6 +20,7 @@ from wecom_notifier.core.segmenter import MessageSegmenter
 from wecom_notifier.core.models import Message, SendResult, SegmentInfo
 from wecom_notifier.core.logger import get_logger
 from wecom_notifier.core.exceptions import NotificationError
+from wecom_notifier.core.webhook_identity import webhook_identity
 
 if TYPE_CHECKING:
     from wecom_notifier.webhook_resource import WebhookResource
@@ -126,11 +127,12 @@ class WebhookPoolBase(ABC):
             try:
                 self._process_message(message)
             except Exception as e:
-                self.logger.error(f"Error processing message {message.id}: {e}")
-                self.logger.exception(e)
+                self.logger.error(
+                    f"Error processing message {message.id} ({type(e).__name__})"
+                )
                 result = self.results.get(message.id)
                 if result:
-                    result.mark_failed(f"Internal error: {e}")
+                    result.mark_failed(f"Internal error ({type(e).__name__})")
             finally:
                 self.message_queue.task_done()
 
@@ -197,13 +199,16 @@ class WebhookPoolBase(ABC):
                 webhook.mark_success()
                 used_webhooks.add(webhook.url)
                 self.logger.debug(
-                    f"Segment {i + 1}/{total_segments} sent via {webhook.url[:30]}... "
+                    f"Segment {i + 1}/{total_segments} sent via "
+                    f"webhook_id={webhook_identity(webhook.url)} "
                     f"for message {message.id}"
                 )
             else:
                 webhook.mark_failure()
+                safe_error = error or "send failed"
                 self.logger.warning(
-                    f"Segment {i + 1}/{total_segments} failed via {webhook.url[:30]}...: {error}"
+                    f"Segment {i + 1}/{total_segments} failed via "
+                    f"webhook_id={webhook_identity(webhook.url)}: {safe_error}"
                 )
 
                 # 重试：尝试其他 webhook
@@ -217,7 +222,8 @@ class WebhookPoolBase(ABC):
                         f"for message {message.id}"
                     )
                     result.mark_failed(
-                        f"Segment {i + 1}/{total_segments} failed on all webhooks"
+                        f"Segment {i + 1}/{total_segments} failed on all webhooks: "
+                        f"{safe_error}"
                     )
                     return
 
@@ -309,7 +315,9 @@ class WebhookPoolBase(ABC):
             )
             self.sender.send(webhook.url, msg_type, content, metadata)
         except Exception as e:
-            self.logger.error(f"Failed to send block alert: {e}")
+            self.logger.error(
+                f"Failed to send block alert ({type(e).__name__})"
+            )
 
     def _prepare_segment_params(
         self,
@@ -379,13 +387,15 @@ class WebhookPoolBase(ABC):
                 webhook.mark_success()
                 exclude_webhooks.add(webhook.url)
                 self.logger.info(
-                    f"Segment {segment_index} retry succeeded via {webhook.url[:30]}..."
+                    f"Segment {segment_index} retry succeeded via "
+                    f"webhook_id={webhook_identity(webhook.url)}"
                 )
                 return True
             else:
                 webhook.mark_failure()
                 self.logger.warning(
-                    f"Segment {segment_index} retry failed via {webhook.url[:30]}..."
+                    f"Segment {segment_index} retry failed via "
+                    f"webhook_id={webhook_identity(webhook.url)}"
                 )
 
         return False

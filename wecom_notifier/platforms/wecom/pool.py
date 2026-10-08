@@ -11,6 +11,7 @@ from wecom_notifier.core.models import SegmentInfo
 from wecom_notifier.platforms.wecom.constants import MSG_TYPE_TEXT, MSG_TYPE_MARKDOWN_V2, MSG_TYPE_IMAGE
 from wecom_notifier.platforms.wecom.adapter import WeComSenderAdapter, WeComMessageConverter
 from wecom_notifier.platforms.wecom.models import Message
+from wecom_notifier.core.webhook_identity import webhook_identity
 
 if TYPE_CHECKING:
     from wecom_notifier.platforms.wecom.resource import WebhookResource
@@ -100,13 +101,17 @@ class WeComWebhookPool(WebhookPoolBase):
                 return True
             else:
                 webhook.mark_failure()
+                safe_error = error or "send failed"
                 self.logger.error(
-                    f"@all workaround failed for message {message.id}: {error}"
+                    f"@all workaround failed for message {message.id} via "
+                    f"webhook_id={webhook_identity(webhook.url)}: {safe_error}"
                 )
                 return False
 
         except Exception as e:
-            self.logger.error(f"@all workaround failed with exception: {e}")
+            self.logger.error(
+                f"@all workaround failed with exception ({type(e).__name__})"
+            )
             return False
 
     def _build_message_metadata(self, message: Message, segment_index: int) -> dict:

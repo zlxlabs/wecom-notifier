@@ -15,6 +15,7 @@ from typing import Dict, Any, Tuple, Optional
 import requests
 
 from wecom_notifier.core.logger import get_logger
+from wecom_notifier.core.webhook_identity import webhook_identity
 from .constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_MAX_RETRIES,
@@ -222,7 +223,8 @@ class FeishuSender:
                     f"rate_limit_retry={rate_limit_retry_count}"
                 )
                 self.logger.debug(
-                    f"Sending Feishu request to {webhook_url[:50]}... ({attempt_desc})"
+                    f"Sending Feishu request to "
+                    f"webhook_id={webhook_identity(webhook_url)} ({attempt_desc})"
                 )
 
                 response = requests.post(
@@ -234,7 +236,7 @@ class FeishuSender:
 
                 result = response.json()
                 code = result.get("code", result.get("StatusCode"))
-                msg = result.get("msg", result.get("StatusMessage", "Unknown error"))
+                safe_code = code if type(code) is int else "unknown"
 
                 if code == CODE_SUCCESS:
                     self.logger.info("Feishu message sent successfully")
@@ -242,13 +244,21 @@ class FeishuSender:
 
                 # 处理不同错误码
                 if code == CODE_BAD_REQUEST:
-                    error = FeishuBadRequestError(f"Bad request: {msg}")
-                    self.logger.error(f"Feishu bad request: {msg}")
+                    error = FeishuBadRequestError(f"Bad request (code {safe_code})")
+                    self.logger.error(
+                        f"Feishu bad request (code {safe_code}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
                 elif code == CODE_RATE_LIMIT:
-                    error = FeishuRateLimitError(f"Rate limit exceeded: {msg}")
-                    self.logger.warning(f"Feishu rate limit exceeded: {msg}")
+                    error = FeishuRateLimitError(
+                        f"Rate limit exceeded (code {safe_code})"
+                    )
+                    self.logger.warning(
+                        f"Feishu rate limit exceeded (code {safe_code}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
 
                     if rate_limit_retry_count < RATE_LIMIT_MAX_RETRIES:
                         rate_limit_retry_count += 1
@@ -266,37 +276,61 @@ class FeishuSender:
                         return False, str(error)
 
                 elif code == CODE_KEYWORD_FAILED:
-                    error = FeishuKeywordError(f"Keyword check failed: {msg}")
-                    self.logger.error(f"Feishu keyword check failed: {msg}")
+                    error = FeishuKeywordError(
+                        f"Keyword check failed (code {safe_code})"
+                    )
+                    self.logger.error(
+                        f"Feishu keyword check failed (code {safe_code}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
                 elif code == CODE_IP_FAILED:
-                    error = FeishuIPError(f"IP not allowed: {msg}")
-                    self.logger.error(f"Feishu IP not allowed: {msg}")
+                    error = FeishuIPError(f"IP not allowed (code {safe_code})")
+                    self.logger.error(
+                        f"Feishu IP not allowed (code {safe_code}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
                 elif code == CODE_SIGN_FAILED:
-                    error = FeishuSignError(f"Sign match failed: {msg}")
-                    self.logger.error(f"Feishu sign failed: {msg}")
+                    error = FeishuSignError(f"Sign match failed (code {safe_code})")
+                    self.logger.error(
+                        f"Feishu sign failed (code {safe_code}) for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
                 else:
-                    error = FeishuError(f"API error {code}: {msg}")
-                    self.logger.error(f"Feishu API error: {code} - {msg}")
+                    error = FeishuError(f"API error {safe_code}")
+                    self.logger.error(
+                        f"Feishu API error {safe_code} for "
+                        f"webhook_id={webhook_identity(webhook_url)}"
+                    )
                     return False, str(error)
 
-            except requests.Timeout as e:
-                last_error = FeishuNetworkError(f"Request timeout: {e}")
-                self.logger.warning(f"Feishu request timeout: {e}")
+            except requests.Timeout:
+                last_error = FeishuNetworkError("Request timeout")
+                self.logger.warning(
+                    f"Feishu request timeout for "
+                    f"webhook_id={webhook_identity(webhook_url)}"
+                )
 
-            except requests.ConnectionError as e:
-                last_error = FeishuNetworkError(f"Connection failed: {e}")
-                self.logger.warning(f"Feishu connection failed: {e}")
+            except requests.ConnectionError:
+                last_error = FeishuNetworkError("Connection failed")
+                self.logger.warning(
+                    f"Feishu connection failed for "
+                    f"webhook_id={webhook_identity(webhook_url)}"
+                )
 
             except Exception as e:
-                last_error = FeishuError(f"Unexpected error: {e}")
-                self.logger.error(f"Feishu unexpected error: {e}")
-                self.logger.exception(e)
+                last_error = FeishuError(
+                    f"Unexpected error ({type(e).__name__})"
+                )
+                self.logger.error(
+                    f"Feishu unexpected error ({type(e).__name__}) for "
+                    f"webhook_id={webhook_identity(webhook_url)}"
+                )
                 return False, str(last_error)
 
             # 处理网络错误重试
