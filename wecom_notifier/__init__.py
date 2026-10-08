@@ -50,7 +50,7 @@ from .logger import setup_logger, disable_logger, enable_logger, get_logger
 # 核心模块（新增导出）
 from .core import RateLimiter, MessageSegmenter
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     # 主要入口

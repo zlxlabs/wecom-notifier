@@ -7,6 +7,16 @@
 
 ---
 
+## [0.3.2] - Unreleased (preparation only)
+
+### 修复（Fixed）
+
+- 企微 text/markdown_v2 与飞书 text/interactive 的分段计划纳入页码、表头、代码围栏、标题和最终序列化预算；飞书按实际 `PreparedRequest.body` 限制完整请求体。
+- 超长表格行按文本切分、超长代码块跨页补齐围栏；不丢正文，保留原始缩进和换行。无法满足极小预算时以 `MESSAGE_SEGMENT_OVERSIZE` 明确失败。
+- 审核扩张后的企微正文再次受最终预算控制；无法本地规划的消息在首次 HTTP 前失败，中途平台拒绝则整体 `SendResult` 失败。
+
+> 本版本仅准备构建与隔离安装验证，尚未发布、未上传 PyPI、未创建 GitHub Release。
+
 ## [0.3.1] - 2026-01-31
 
 ### 🐛 修复（Fixed）

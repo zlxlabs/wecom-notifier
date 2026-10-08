@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Set, Tuple, Any, TYPE_CHECKING
 
 from wecom_notifier.core.protocols import SenderProtocol, MessageConverterProtocol
-from wecom_notifier.core.segmenter import MessageSegmenter
+from wecom_notifier.core.segmenter import MessageSegmenter, MessageSegmentOversizeError
 from wecom_notifier.core.models import Message, SendResult, SegmentInfo
 from wecom_notifier.core.logger import get_logger
 from wecom_notifier.core.exceptions import NotificationError
@@ -153,8 +153,12 @@ class WebhookPoolBase(ABC):
 
         self.logger.info(f"Processing message {message.id} in pool (type={message.msg_type})")
 
-        # 1. 分段
-        segments = self._get_segments(message)
+        # 1. 分段：本地不可行计划在任何发送前显式失败。
+        try:
+            segments = self._get_segments(message)
+        except MessageSegmentOversizeError as error:
+            result.mark_failed(str(error))
+            return
         total_segments = len(segments)
 
         self.logger.debug(f"Message {message.id} split into {total_segments} segments")
@@ -164,7 +168,11 @@ class WebhookPoolBase(ABC):
             self.content_moderator.enabled and
             not self.should_skip_moderation(message.msg_type)):
 
-            moderated_result = self._moderate_segments(message, segments)
+            try:
+                moderated_result = self._moderate_segments(message, segments)
+            except MessageSegmentOversizeError as error:
+                result.mark_failed(str(error))
+                return
             if moderated_result is None:
                 # 被拒绝
                 result.mark_failed("Content blocked by moderator")
@@ -256,7 +264,14 @@ class WebhookPoolBase(ABC):
         if self.should_skip_segmentation(message.msg_type):
             return [SegmentInfo(content=message.content, is_first=True, is_last=True)]
 
-        return self.segmenter.segment(message.content, message.msg_type)
+        return self.segmenter._segment_bounded(
+            message.content,
+            message.msg_type,
+            self._segment_budget(message.msg_type),
+        )
+
+    def _segment_budget(self, msg_type: str) -> int:
+        return self.segmenter.max_bytes
 
     def _moderate_segments(
         self,
@@ -286,14 +301,21 @@ class WebhookPoolBase(ABC):
                 self._send_block_alert(message, segment)
                 return None
 
-            moderated_segment = SegmentInfo(
-                content=moderated_content,
-                is_first=segment.is_first,
-                is_last=segment.is_last,
-                page_number=segment.page_number,
-                total_pages=segment.total_pages
+            bounded = self.segmenter._segment_bounded(
+                moderated_content,
+                message.msg_type,
+                self._segment_budget(message.msg_type),
             )
-            moderated_segments.append(moderated_segment)
+            if len(bounded) == 1 and bounded[0].content == moderated_content:
+                moderated_segments.append(SegmentInfo(
+                    moderated_content,
+                    is_first=segment.is_first,
+                    is_last=segment.is_last,
+                    page_number=segment.page_number,
+                    total_pages=segment.total_pages,
+                ))
+            else:
+                moderated_segments.extend(bounded)
 
         return moderated_segments
 

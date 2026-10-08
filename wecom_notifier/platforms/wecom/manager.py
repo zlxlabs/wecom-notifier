@@ -10,11 +10,14 @@ from wecom_notifier.core.logger import get_logger
 from wecom_notifier.core.webhook_identity import webhook_identity
 from wecom_notifier.core.models import SendResult, SegmentInfo
 from wecom_notifier.core.rate_limiter import RateLimiter
-from wecom_notifier.core.segmenter import MessageSegmenter
+from wecom_notifier.core.segmenter import MessageSegmenter, MessageSegmentOversizeError
 
 from .sender import Sender
 from .models import Message
-from .constants import MSG_TYPE_TEXT, MSG_TYPE_MARKDOWN_V2, MSG_TYPE_IMAGE
+from .constants import (
+    MSG_TYPE_TEXT, MSG_TYPE_MARKDOWN_V2, MSG_TYPE_IMAGE,
+    _MAX_BYTES_PER_TEXT, MAX_BYTES_PER_MESSAGE,
+)
 
 if TYPE_CHECKING:
     from wecom_notifier.core.moderation import ContentModerator
@@ -126,8 +129,12 @@ class WebhookManager:
 
         self.logger.info(f"Processing message {message.id} (type={message.msg_type})")
 
-        # 分段
-        segments = self._get_segments(message)
+        # 分段：本地不可能计划在首次 HTTP 前失败，并反映到 SendResult。
+        try:
+            segments = self._get_segments(message)
+        except MessageSegmentOversizeError as error:
+            result.mark_failed(str(error))
+            return
         total_segments = len(segments)
 
         self.logger.debug(f"Message {message.id} split into {total_segments} segments")
@@ -170,7 +177,12 @@ class WebhookManager:
                 )
                 moderated_segments.append(moderated_segment)
 
-            segments = moderated_segments
+            try:
+                segments = self._resegment_moderated(message, moderated_segments)
+            except MessageSegmentOversizeError as error:
+                result.mark_failed(str(error))
+                return
+            total_segments = len(segments)
 
         # 发送每个分段
         for i, segment in enumerate(segments):
@@ -231,8 +243,37 @@ class WebhookManager:
         if message.msg_type == MSG_TYPE_IMAGE:
             return [SegmentInfo(message.content, is_first=True, is_last=True)]
 
-        # 文本和Markdown需要分段
-        return self.segmenter.segment(message.content, message.msg_type)
+        return self.segmenter._segment_bounded(
+            message.content,
+            message.msg_type,
+            self._segment_budget(message.msg_type),
+        )
+
+    @staticmethod
+    def _segment_budget(msg_type: str) -> int:
+        return _MAX_BYTES_PER_TEXT if msg_type == MSG_TYPE_TEXT else MAX_BYTES_PER_MESSAGE
+
+    def _resegment_moderated(self, message: Message, segments):
+        if message.msg_type == MSG_TYPE_IMAGE:
+            return segments
+        bounded = []
+        for segment in segments:
+            reviewed = self.segmenter._segment_bounded(
+                segment.content,
+                message.msg_type,
+                self._segment_budget(message.msg_type),
+            )
+            if len(reviewed) == 1 and reviewed[0].content == segment.content:
+                bounded.append(SegmentInfo(
+                    segment.content,
+                    is_first=segment.is_first,
+                    is_last=segment.is_last,
+                    page_number=segment.page_number,
+                    total_pages=segment.total_pages,
+                ))
+            else:
+                bounded.extend(reviewed)
+        return bounded
 
     def _send_segment(self, message: Message, content: str, segment_index: int) -> tuple:
         """

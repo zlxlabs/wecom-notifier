@@ -112,14 +112,7 @@ class FeishuSender:
         Returns:
             Tuple[bool, Optional[str]]: (是否成功, 错误信息)
         """
-        data = {
-            "msg_type": MSG_TYPE_TEXT,
-            "content": {
-                "text": content
-            }
-        }
-
-        return self._send_request(webhook_url, data)
+        return self._send_request(webhook_url, self._text_payload(content))
 
     def send_card(
         self,
@@ -140,29 +133,56 @@ class FeishuSender:
         Returns:
             Tuple[bool, Optional[str]]: (是否成功, 错误信息)
         """
-        data = {
+        return self._send_request(
+            webhook_url,
+            self._card_payload(content, title, template),
+        )
+
+    @staticmethod
+    def _text_payload(content: str) -> Dict[str, Any]:
+        return {"msg_type": MSG_TYPE_TEXT, "content": {"text": content}}
+
+    @staticmethod
+    def _card_payload(content: str, title: str, template: str) -> Dict[str, Any]:
+        return {
             "msg_type": MSG_TYPE_INTERACTIVE,
             "card": {
                 "schema": "2.0",
                 "header": {
-                    "title": {
-                        "tag": "plain_text",
-                        "content": title
-                    },
-                    "template": template
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": template,
                 },
-                "body": {
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": content
-                        }
-                    ]
-                }
-            }
+                "body": {"elements": [{"tag": "markdown", "content": content}]},
+            },
         }
 
-        return self._send_request(webhook_url, data)
+    def _prepared_body_size(self, webhook_url: str, data: Dict[str, Any]) -> int:
+        signed_data = dict(data)
+        if self.secret:
+            timestamp = int(time.time())
+            signed_data["timestamp"] = str(timestamp)
+            signed_data["sign"] = self._gen_sign(timestamp)
+        prepared = requests.Request(
+            "POST", webhook_url, json=signed_data,
+            headers={"Content-Type": "application/json"},
+        ).prepare()
+        return len(prepared.body)
+
+    def _text_body_size(self, webhook_url: str, content: str) -> int:
+        return self._prepared_body_size(webhook_url, self._text_payload(content))
+
+    def _card_body_size(
+        self, webhook_url: str, content: str, title: str, template: str
+    ) -> int:
+        return self._prepared_body_size(
+            webhook_url, self._card_payload(content, title, template)
+        )
+
+    @staticmethod
+    def _content_wire_size(content: str) -> int:
+        """requests JSON 字符串字段在 body 中的精确增量，不含引号。"""
+        serialized = requests.compat.json.dumps(content, allow_nan=False)
+        return len(serialized[1:-1].encode("utf-8"))
 
     def send_raw_card(
         self,

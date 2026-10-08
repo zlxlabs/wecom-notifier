@@ -9,8 +9,9 @@ MSG_TYPE_INTERACTIVE = "interactive"  # 卡片消息
 MSG_TYPE_IMAGE = "image"
 MSG_TYPE_SHARE_CHAT = "share_chat"  # 群名片
 
-# 分段设置
-MAX_BYTES_PER_MESSAGE = 19000  # 实际限制 20KB，留安全余量
+# 自定义机器人官方请求体限制为 20 KB；正文最终按 PreparedRequest.body 计量。
+_MAX_REQUEST_BODY_BYTES = 20000
+MAX_BYTES_PER_MESSAGE = 19000  # 常规 UTF-8 预算；interactive 走整请求体计划
 
 # 频率限制
 RATE_LIMIT_PER_MINUTE = 100  # 每分钟 100 条
