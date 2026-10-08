@@ -4,7 +4,7 @@
 
 - 包验收：**通过**。PyPI 正式 index 安装的 `wecom-notifier==0.3.2` 与唯一 run 的 wheel/sdist 字节一致；3.11.15 隔离消费者验证通过。
 - 原始 GitHub Actions run：**仍为 failure**，未重跑、未改写。本收据不把包通过冒充整 run 成功。
-- 失败点：`Verify published PyPI files and hashes` 请求 PyPI 版本 JSON 时收到 HTTP 404；发生在文件清单/哈希比较之前。发行几秒后公开包与 metadata 可取且逐字节匹配。
+- 失败点：`Verify published PyPI files and hashes` 请求 PyPI 版本 JSON 时收到 HTTP 404；发生在文件清单/哈希比较之前。独立验收时公开包与 metadata 可取且逐字节匹配；没有测得接口从 404 恢复到 200 的确切耗时。
 
 ## 冻结 run 与失败证据
 
